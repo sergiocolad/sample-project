@@ -1,0 +1,50 @@
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: shelfie
+      POSTGRES_PASSWORD: shelfie
+      POSTGRES_DB: shelfie
+    ports:
+      - "5432:5432"
+    volumes:
+      - shelfie_pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U shelfie"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  backend:
+    build: ./backend
+    environment:
+      NODE_ENV: development
+      PORT: 3000
+      DATABASE_URL: postgresql://shelfie:shelfie@db:5432/shelfie?schema=public
+      JWT_ACCESS_SECRET: ${JWT_ACCESS_SECRET:-dev_only_access_secret_change_me}
+      JWT_REFRESH_SECRET: ${JWT_REFRESH_SECRET:-dev_only_refresh_secret_change_me}
+      JWT_ACCESS_EXPIRES_IN: 15m
+      JWT_REFRESH_EXPIRES_IN: 7d
+      CORS_ORIGIN: http://localhost:5173
+      OPEN_LIBRARY_BASE_URL: https://openlibrary.org
+      OPEN_LIBRARY_TIMEOUT_MS: 5000
+    ports:
+      - "3000:3000"
+    depends_on:
+      db:
+        condition: service_healthy
+
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        # The static build has no server-side proxy, so it needs the
+        # backend's browser-reachable origin baked in at build time.
+        VITE_API_BASE_URL: http://localhost:3000
+    ports:
+      - "5173:5173"
+    depends_on:
+      - backend
+
+volumes:
+  shelfie_pg_data:
