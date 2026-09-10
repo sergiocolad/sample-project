@@ -1,0 +1,376 @@
+openapi: 3.0.3
+info:
+  title: Shelfie API
+  description: >
+    REST API for Shelfie — a personal reading tracker. See
+    docs/02-architecture/API_DESIGN.md for cross-cutting conventions
+    (error shape, pagination, auth) not repeated per-endpoint here.
+  version: 0.1.0
+  license:
+    name: MIT
+servers:
+  - url: http://localhost:3000/api
+    description: Local development
+
+tags:
+  - name: auth
+  - name: books
+  - name: shelf
+  - name: stats
+
+paths:
+  /auth/register:
+    post:
+      tags: [auth]
+      summary: Create a new account
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password, name]
+              properties:
+                email: { type: string, format: email }
+                password: { type: string, minLength: 8 }
+                name: { type: string, minLength: 1 }
+      responses:
+        '201':
+          description: Account created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AuthResponse' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+
+  /auth/login:
+    post:
+      tags: [auth]
+      summary: Log in with email and password
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password]
+              properties:
+                email: { type: string, format: email }
+                password: { type: string }
+      responses:
+        '200':
+          description: Logged in
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AuthResponse' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /auth/refresh:
+    post:
+      tags: [auth]
+      summary: Exchange a valid refresh cookie for a new access token
+      security: []
+      responses:
+        '200':
+          description: New access token issued
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  accessToken: { type: string }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /auth/logout:
+    post:
+      tags: [auth]
+      summary: Clear the refresh session
+      responses:
+        '204': { description: Logged out }
+
+  /auth/me:
+    get:
+      tags: [auth]
+      summary: Get the current authenticated user
+      responses:
+        '200':
+          description: Current user
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/User' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /books/search:
+    get:
+      tags: [books]
+      summary: Search books via the Open Library catalog
+      parameters:
+        - name: q
+          in: query
+          required: true
+          schema: { type: string, minLength: 2 }
+        - name: page
+          in: query
+          schema: { type: integer, minimum: 1, default: 1 }
+        - name: limit
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
+      responses:
+        '200':
+          description: Search results
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: '#/components/schemas/BookSummary' }
+                  meta: { $ref: '#/components/schemas/PageMeta' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+        '502': { $ref: '#/components/responses/UpstreamError' }
+
+  /books/{openLibraryId}:
+    get:
+      tags: [books]
+      summary: Get details for a single book by its Open Library work id
+      parameters:
+        - name: openLibraryId
+          in: path
+          required: true
+          schema: { type: string, example: OL27448W }
+      responses:
+        '200':
+          description: Book detail
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/BookSummary' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '502': { $ref: '#/components/responses/UpstreamError' }
+
+  /shelf:
+    get:
+      tags: [shelf]
+      summary: List the caller's shelf entries
+      parameters:
+        - name: status
+          in: query
+          schema: { $ref: '#/components/schemas/ShelfStatus' }
+        - name: page
+          in: query
+          schema: { type: integer, minimum: 1, default: 1 }
+        - name: limit
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
+      responses:
+        '200':
+          description: Shelf entries
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: '#/components/schemas/ShelfEntry' }
+                  meta: { $ref: '#/components/schemas/PageMeta' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+    post:
+      tags: [shelf]
+      summary: Add a book to the caller's shelf (or update status if already shelved)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [openLibraryId, status]
+              properties:
+                openLibraryId: { type: string, example: OL27448W }
+                status: { $ref: '#/components/schemas/ShelfStatus' }
+      responses:
+        '201':
+          description: Added to shelf (first time)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ShelfEntry' }
+        '200':
+          description: Existing entry updated (already shelved)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ShelfEntry' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+        '502': { $ref: '#/components/responses/UpstreamError' }
+
+  /shelf/{id}:
+    patch:
+      tags: [shelf]
+      summary: Update status, progress, rating, or review on a shelf entry
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                status: { $ref: '#/components/schemas/ShelfStatus' }
+                currentPage: { type: integer, minimum: 0 }
+                totalPages: { type: integer, minimum: 1 }
+                rating: { type: integer, minimum: 1, maximum: 5 }
+                review: { type: string, maxLength: 2000 }
+      responses:
+        '200':
+          description: Updated entry
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ShelfEntry' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+    delete:
+      tags: [shelf]
+      summary: Remove a book from the caller's shelf
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '204': { description: Removed }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /stats:
+    get:
+      tags: [stats]
+      summary: Aggregate reading statistics for the caller
+      responses:
+        '200':
+          description: Stats
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Stats' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  responses:
+    Unauthorized:
+      description: Missing, invalid, or expired access token
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    NotFound:
+      description: Resource does not exist or is not owned by the caller
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    Conflict:
+      description: Resource already exists
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    ValidationError:
+      description: Request failed schema validation
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    UpstreamError:
+      description: The Open Library API was unavailable or errored
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+
+  schemas:
+    Error:
+      type: object
+      properties:
+        error:
+          type: object
+          properties:
+            code: { type: string, example: VALIDATION_ERROR }
+            message: { type: string }
+            details:
+              type: array
+              items:
+                type: object
+                properties:
+                  field: { type: string }
+                  issue: { type: string }
+
+    PageMeta:
+      type: object
+      properties:
+        page: { type: integer }
+        limit: { type: integer }
+        total: { type: integer }
+
+    User:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        email: { type: string, format: email }
+        name: { type: string }
+        createdAt: { type: string, format: date-time }
+
+    AuthResponse:
+      type: object
+      properties:
+        user: { $ref: '#/components/schemas/User' }
+        accessToken: { type: string }
+
+    BookSummary:
+      type: object
+      properties:
+        openLibraryId: { type: string, example: OL27448W }
+        title: { type: string }
+        author: { type: string }
+        coverUrl: { type: string, nullable: true }
+        publishedYear: { type: integer, nullable: true }
+
+    ShelfStatus:
+      type: string
+      enum: [WANT_TO_READ, READING, READ]
+
+    ShelfEntry:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        status: { $ref: '#/components/schemas/ShelfStatus' }
+        currentPage: { type: integer, nullable: true }
+        totalPages: { type: integer, nullable: true }
+        rating: { type: integer, nullable: true, minimum: 1, maximum: 5 }
+        review: { type: string, nullable: true }
+        startedAt: { type: string, format: date-time, nullable: true }
+        finishedAt: { type: string, format: date-time, nullable: true }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+        book: { $ref: '#/components/schemas/BookSummary' }
+
+    Stats:
+      type: object
+      properties:
+        booksReadThisYear: { type: integer }
+        booksReadAllTime: { type: integer }
+        pagesReadThisYear: { type: integer }
+        currentlyReading: { type: integer }
+        ratingDistribution:
+          type: object
+          additionalProperties: { type: integer }
+          example: { "1": 0, "2": 1, "3": 5, "4": 14, "5": 8 }
+
+security:
+  - bearerAuth: []
